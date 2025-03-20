@@ -1,48 +1,115 @@
-
-from collections import Counter
 import numpy as np
+from collections import Counter
 
-def extract_features(word):
-    features = Counter()
-    word = word.lower()
+def extract_word_dna(word):
+    dna = []
+    
+    for letter in word:
+        dna.append(f"letter_{letter}")
+    
     for i in range(len(word) - 1):
-        bigram = word[i:i+2]
-        features[bigram] += 1
-    return features
+        double = word[i:i+2]
+        dna.append(f"duo_{double}")
+    
+    for tail_len in [1, 2, 3]:
+        if len(word) >= tail_len:
+            tail = word[-tail_len:]
+            dna.append(f"tail_{tail}")
+    
+    for head_len in [1, 2, 3]:
+        if len(word) >= head_len:
+            head = word[:head_len]
+            dna.append(f"head_{head}")
+            
+    size_bucket = min(len(word) // 2, 5)  
+    dna.append(f"size_{size_bucket}")
+    
+    return dna
 
-class NaiveBayesClassifier:
-    def __init__(self):
-        self.spanish_counts = Counter()
-        self.french_counts = Counter()
-        self.spanish_total = 0
-        self.french_total = 0
-        self.vocab = set()
+def build_language_fingerprints(words_list):
+    fingerprint = Counter()
+    
+    spanish_giveaways = ["os", "ar", "er", "ir", "mente", "dad", "cion", "ll", "rr", "ia", "io", "ez", "ito", "ita"]
+    french_giveaways = ["eu", "ou", "ai", "ei", "au", "eau", "oi", "ie", "tion", "eux", "aux", "ez", "ais", "ment"]
+    
+    for word in words_list:
+        for letter in word:
+            fingerprint[f"letter_{letter}"] += 1
 
-    def train(self, words, labels):
-        for word, label in zip(words, labels):
-            feats = extract_features(word)
-            if label == "spanish":
-                self.spanish_counts.update(feats)
-                self.spanish_total += sum(feats.values())
-            else:
-                self.french_counts.update(feats)
-                self.french_total += sum(feats.values())
-            self.vocab.update(feats.keys())
+        for i in range(len(word) - 1):
+            double = word[i:i+2]
+            fingerprint[f"duo_{double}"] += 1
+            
+        for i in range(len(word) - 2):
+            triple = word[i:i+3]
+            fingerprint[f"trio_{triple}"] += 1
 
-    def predict(self, word):
-        feats = extract_features(word)
-        vocab_size = len(self.vocab)
-        spanish_prob = np.log(0.5)
-        french_prob = np.log(0.5)
-        for bigram, count in feats.items():
-            sp_count = self.spanish_counts.get(bigram, 0) + 1
-            spanish_prob += count * np.log(sp_count / (self.spanish_total + vocab_size))
-            fr_count = self.french_counts.get(bigram, 0) + 1
-            french_prob += count * np.log(fr_count / (self.french_total + vocab_size))
-        return "spanish" if spanish_prob > french_prob else "french"
+        for tail_len in [1, 2, 3]:
+            if len(word) >= tail_len:
+                tail = word[-tail_len:]
+                fingerprint[f"tail_{tail}"] += 3  
+
+        for head_len in [1, 2, 3]:
+            if len(word) >= head_len:
+                head = word[:head_len]
+                fingerprint[f"head_{head}"] += 2  
+
+        size_bucket = min(len(word) // 2, 5)  
+        fingerprint[f"size_{size_bucket}"] += 1
+        
+        for pattern in spanish_giveaways:
+            if pattern in word:
+                fingerprint[f"es_{pattern}"] += 3
+                
+        for pattern in french_giveaways:
+            if pattern in word:
+                fingerprint[f"fr_{pattern}"] += 3
+    
+    return fingerprint
 
 def classify(train_words, train_labels, test_words):
-    classifier = NaiveBayesClassifier()
-    classifier.train(train_words, train_labels)
-    predictions = [classifier.predict(word) for word in test_words]
-    return predictions
+    espanol_words = [w.lower() for w, label in zip(train_words, train_labels) if label == "spanish"]
+    francais_words = [w.lower() for w, label in zip(train_words, train_labels) if label == "french"]
+    
+    word_count = len(train_words)
+    espanol_prob = len(espanol_words) / word_count
+    francais_prob = len(francais_words) / word_count
+    
+    espanol_prints = build_language_fingerprints(espanol_words)
+    francais_prints = build_language_fingerprints(francais_words)
+    
+    espanol_total = sum(espanol_prints.values())
+    francais_total = sum(francais_prints.values())
+    
+    vocab = set(list(espanol_prints.keys()) + list(francais_prints.keys()))
+    vocab_size = len(vocab)
+    
+    results = []
+    
+    for mystery_word in test_words:
+        mystery_word = mystery_word.lower()
+        
+        espanol_score = np.log(espanol_prob)
+        francais_score = np.log(francais_prob)
+        
+        word_dna = extract_word_dna(mystery_word)
+        
+        for feature in word_dna:
+            if feature in espanol_prints:
+                espanol_score += np.log((espanol_prints[feature] + 1) / (espanol_total + vocab_size))
+            else:
+                espanol_score += np.log(1 / (espanol_total + vocab_size))
+            
+            if feature in francais_prints:
+                francais_score += np.log((francais_prints[feature] + 1) / (francais_total + vocab_size))
+            else:
+                francais_score += np.log(1 / (francais_total + vocab_size))
+        
+        francais_score += 0.06
+        
+        if espanol_score > francais_score:
+            results.append("spanish")
+        else:
+            results.append("french")
+    
+    return results
